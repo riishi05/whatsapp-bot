@@ -62,6 +62,10 @@ export default function ChatMonitor({ tenantId }) {
 
   const activeSession = sessions.find((s) => s.phone_number === activeNumber);
 
+  // Chat is considered closed once the bot has resolved it — no more
+  // messages should be sendable from the dashboard for that thread.
+  const isChatClosed = activeSession?.status === "RESOLVED";
+
   const sendTestMessage = async () => {
     if (!testInput.trim() || sending) return;
     setSending(true);
@@ -87,7 +91,7 @@ export default function ChatMonitor({ tenantId }) {
   const [threadSending, setThreadSending] = useState(false);
 
   const sendToActiveThread = async () => {
-    if (!threadInput.trim() || threadSending || !activeNumber) return;
+    if (!threadInput.trim() || threadSending || !activeNumber || isChatClosed) return;
     setThreadSending(true);
     const messageText = threadInput;
     setThreadInput("");
@@ -110,7 +114,7 @@ export default function ChatMonitor({ tenantId }) {
       <div className="w-80 border-r bg-white overflow-y-auto flex flex-col">
         {/* Test Chat box — bypasses WhatsApp entirely, runs the LangGraph agent directly */}
         <div className="p-3 border-b bg-yellow-50">
-          <div className="text-xs font-semibold text-yellow-800 mb-2">Chat</div>
+          <div className="text-xs font-semibold text-yellow-800 mb-2">🧪 Test Chat (no WhatsApp needed)</div>
           <input
             value={testPhone}
             onChange={(e) => setTestPhone(e.target.value)}
@@ -176,22 +180,29 @@ export default function ChatMonitor({ tenantId }) {
                 <Bubble key={i} msg={m} />
               ))}
             </div>
-            <div className="p-3 bg-white border-t flex gap-2">
-              <input
-                value={threadInput}
-                onChange={(e) => setThreadInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && sendToActiveThread()}
-                placeholder={`Message ${activeNumber}…`}
-                className="flex-1 border rounded-full px-4 py-2 text-sm"
-              />
-              <button
-                onClick={sendToActiveThread}
-                disabled={threadSending}
-                className="bg-wa-green text-white px-5 rounded-full text-sm font-medium disabled:opacity-50"
-              >
-                {threadSending ? "…" : "Send"}
-              </button>
-            </div>
+
+            {isChatClosed ? (
+              <div className="p-3 bg-gray-100 border-t text-center text-xs text-gray-500 font-medium">
+                🔒 This chat has been closed — no further messages can be sent.
+              </div>
+            ) : (
+              <div className="p-3 bg-white border-t flex gap-2">
+                <input
+                  value={threadInput}
+                  onChange={(e) => setThreadInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sendToActiveThread()}
+                  placeholder={`Message ${activeNumber}…`}
+                  className="flex-1 border rounded-full px-4 py-2 text-sm"
+                />
+                <button
+                  onClick={sendToActiveThread}
+                  disabled={threadSending}
+                  className="bg-wa-green text-white px-5 rounded-full text-sm font-medium disabled:opacity-50"
+                >
+                  {threadSending ? "…" : "Send"}
+                </button>
+              </div>
+            )}
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">

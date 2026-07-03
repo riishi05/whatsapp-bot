@@ -2,6 +2,7 @@
 The four pipeline nodes described in Task 3.
 """
 import json
+import re
 
 from app.database import messages_col, sessions_col, tenants_col
 from app.graph.state import AgentState
@@ -111,26 +112,64 @@ TOOL_SCHEMA = [
     }
 ]
 
+# ------------------------------------------------------------------
+# Hardcoded shortcut keyword sets
+# ------------------------------------------------------------------
+GREETING_WORDS = {"hi", "hello", "hey", "hii", "heyy", "helo", "hola", "hlo"}
+CONFIRM_WORDS = {"yes", "yeah", "yep", "confirm", "confirmed"}
+NOT_FOUND_PHRASES = {"item not found", "not found", "item not available"}
+
+
+def _words(text: str) -> set:
+    return set(re.findall(r"\b\w+\b", text.strip().lower()))
+
 
 async def llm_reasoning_node(state: AgentState) -> AgentState:
     from app.llm import call_llm_with_tool  # local import avoids circulars at module load
 
+    normalized = state["inbound_text"].strip().lower()
+    msg_words = _words(normalized)
+
     # ------------------------------------------------------------------
     # Quick hardcoded shortcuts (skip the LLM call entirely for these)
+    # Every shortcut here sets sentiment_needs_human = False, which makes
+    # dispatcher_node mark the session RESOLVED (closed) afterwards.
     # ------------------------------------------------------------------
-    normalized = state["inbound_text"].strip().lower()
 
-    if normalized == "hi":
+    # 1) Greeting -> welcome message
+    if msg_words & GREETING_WORDS:
         state["response_type"] = "text"
-        state["response_text"] = "hello"
+        state["response_text"] = "hello, welcome!"
         state["sentiment_needs_human"] = False
         return state
 
-    if normalized == "available":
-        item_names = [m.get("label") or m["keyword"] for m in state["media_library"]]
-        names_list = ", ".join(item_names) if item_names else "no items configured yet"
+    # 2) "item not found" -> apology + close chat
+    if any(phrase in normalized for phrase in NOT_FOUND_PHRASES):
         state["response_type"] = "text"
-        state["response_text"] = f"yes: {names_list}"
+        state["response_text"] = "new items will be added soon"
+        state["sentiment_needs_human"] = False
+        return state
+
+    # 3) "yes" / confirmation -> booking confirmed, close chat
+    if msg_words & CONFIRM_WORDS:
+        state["response_type"] = "text"
+        state["response_text"] = "booking confirmed, msg will be sent in 24 hrs"
+        state["sentiment_needs_human"] = False
+        return state
+
+    # 4) "available" -> list media library items with confirm instructions
+    if "available" in normalized:
+        item_names = [m.get("label") or m["keyword"] for m in state["media_library"]]
+        if item_names:
+            names_list = ", ".join(item_names)
+            reply_text = (
+                f"yes: {names_list}\n\n"
+                "to confirm click item name and yes"
+            )
+        else:
+            reply_text = "no items configured yet"
+        state["response_type"] = "text"
+        state["response_text"] = reply_text
         state["sentiment_needs_human"] = False
         return state
     # ------------------------------------------------------------------
@@ -151,30 +190,6 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         "Only choose image/document response_type if the customer is clearly asking for "
         "visual/document assets that match a media_keyword above."
     )
-
-    tool_input = await call_llm_with_tool(
-        system_prompt=system_prompt,
-        user_message=state["inbound_text"],
-        tools=TOOL_SCHEMA,
-    )
-
-    state["response_type"] = tool_input.get("response_type", "text")
-    state["response_text"] = tool_input.get("response_text", "")
-    state["sentiment_needs_human"] = bool(tool_input.get("needs_human", False))
-
-    media_keyword = tool_input.get("media_keyword")
-    if state["response_type"] in ("image", "document") and media_keyword:
-        match = next((m for m in state["media_library"] if m["keyword"] == media_keyword), None)
-        if match:
-            state["media_url"] = match["url"]
-            state["media_mime_type"] = match["mime_type"]
-            state["media_filename"] = match.get("label", media_keyword) + (
-                ".pdf" if match["mime_type"] == "application/pdf" else ""
-            )
-        else:
-            # keyword hallucinated / not found -> fall back to text
-            state["response_type"] = "text"
-    return state
 
     tool_input = await call_llm_with_tool(
         system_prompt=system_prompt,
