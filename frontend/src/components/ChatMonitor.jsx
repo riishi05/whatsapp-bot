@@ -110,7 +110,7 @@ export default function ChatMonitor({ tenantId }) {
       <div className="w-80 border-r bg-white overflow-y-auto flex flex-col">
         {/* Test Chat box — bypasses WhatsApp entirely, runs the LangGraph agent directly */}
         <div className="p-3 border-b bg-yellow-50">
-          <div className="text-xs font-semibold text-yellow-800 mb-2">🧪 Test Chat (no WhatsApp needed)</div>
+          <div className="text-xs font-semibold text-yellow-800 mb-2">Chat</div>
           <input
             value={testPhone}
             onChange={(e) => setTestPhone(e.target.value)}
