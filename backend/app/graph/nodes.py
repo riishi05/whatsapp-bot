@@ -119,9 +119,17 @@ GREETING_WORDS = {"hi", "hello", "hey", "hii", "heyy", "helo", "hola", "hlo"}
 CONFIRM_WORDS = {"yes", "yeah", "yep", "confirm", "confirmed"}
 NOT_FOUND_PHRASES = {"item not found", "not found", "item not available"}
 
+ASK_PHONE_MSG = "please share your phone number to confirm the booking"
+
 
 def _words(text: str) -> set:
     return set(re.findall(r"\b\w+\b", text.strip().lower()))
+
+
+def _looks_like_phone_number(text: str) -> bool:
+    """True if the message is mostly digits and a plausible phone length."""
+    digits = re.sub(r"\D", "", text)
+    return 7 <= len(digits) <= 15
 
 
 async def llm_reasoning_node(state: AgentState) -> AgentState:
@@ -130,11 +138,30 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
     normalized = state["inbound_text"].strip().lower()
     msg_words = _words(normalized)
 
+    # Was the bot's last message the "please share your phone number" prompt?
+    last_bot_msg = next(
+        (h["text"] for h in reversed(state["history"]) if h["sender"] == "bot"), ""
+    )
+    awaiting_phone_number = ASK_PHONE_MSG in (last_bot_msg or "").strip().lower()
+
     # ------------------------------------------------------------------
     # Quick hardcoded shortcuts (skip the LLM call entirely for these)
-    # Every shortcut here sets sentiment_needs_human = False, which makes
-    # dispatcher_node mark the session RESOLVED (closed) afterwards.
     # ------------------------------------------------------------------
+
+    # 0) We just asked for a phone number and this message looks like one
+    #    -> save it and confirm.
+    if awaiting_phone_number and _looks_like_phone_number(state["inbound_text"]):
+        customer_phone = re.sub(r"\D", "", state["inbound_text"])
+        await sessions_col().update_one(
+            {"tenant_id": state["tenant_id"], "phone_number": state["phone_number"]},
+            {"$set": {"context_variables.customer_phone": customer_phone}},
+        )
+        state["response_type"] = "text"
+        state["response_text"] = (
+            "number saved. confirmation message will be sent in 24 hrs"
+        )
+        state["sentiment_needs_human"] = False
+        return state
 
     # 1) Greeting -> welcome message
     if msg_words & GREETING_WORDS:
@@ -143,17 +170,17 @@ async def llm_reasoning_node(state: AgentState) -> AgentState:
         state["sentiment_needs_human"] = False
         return state
 
-    # 2) "item not found" -> apology + close chat
+    # 2) "item not found" -> apology
     if any(phrase in normalized for phrase in NOT_FOUND_PHRASES):
         state["response_type"] = "text"
         state["response_text"] = "new items will be added soon"
         state["sentiment_needs_human"] = False
         return state
 
-    # 3) "yes" / confirmation -> booking confirmed, close chat
+    # 3) "yes" / confirmation -> ask for phone number before confirming
     if msg_words & CONFIRM_WORDS:
         state["response_type"] = "text"
-        state["response_text"] = "booking confirmed, msg will be sent in 24 hrs"
+        state["response_text"] = ASK_PHONE_MSG
         state["sentiment_needs_human"] = False
         return state
 
